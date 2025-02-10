@@ -1,58 +1,118 @@
 package main
 
 import (
+	"errors"
 	"flag"
+	"io/fs"
 	"log"
-	"path/filepath"
+	"os"
 )
 
 func main() {
-	app := New()
-	app.AddFlagConfig()
-
-	log.Printf("Logseq Directory: %s\n", app.LogseqDir)
-	log.Printf("Obsidian Directory: %s\n", app.ObsidianDir)
-
-	app.Sync()
-}
-
-type App struct {
-	LogseqDir   string
-	ObsidianDir string
-}
-
-func New() *App {
-	return &App{}
-}
-
-func (a *App) AddFlagConfig() {
 	logseqDir := flag.String("logseq-dir", "", "Path to the Logseq directory")
 	obsidianDir := flag.String("obsidian-dir", "", "Path to the Obsidian directory")
 
 	flag.Parse()
 
-	absLogseqDir, err := filepath.Abs(*logseqDir)
-	if err != nil {
-		log.Fatalf("Error geting absolute path for Logseq directory: %v", err)
+	if *logseqDir == "" || *obsidianDir == "" {
+		log.Fatalf("Logseq and Obsidian directories are required")
 	}
-	a.LogseqDir = absLogseqDir
 
-	absObsidianDir, err := filepath.Abs(*obsidianDir)
+	logseqFS, err := NewLogseqFS(os.DirFS(*logseqDir))
 	if err != nil {
-		log.Fatalf("Error geting absolute path for Obsidian directory: %v", err)
+		log.Fatalf("Error creating Logseq file system: %v", err)
 	}
-	a.ObsidianDir = absObsidianDir
+	obsidianFS, err := NewObsidianFS(os.DirFS(*obsidianDir))
+	if err != nil {
+		log.Fatalf("Error creating Obsidian file system: %v", err)
+	}
+
+	app := NewApp(logseqFS, obsidianFS)
+	err = app.Sync()
+
+	if err != nil {
+		log.Fatalf("Error syncing: %v", err)
+	}
 }
 
-func (a *App) Sync() {
-	a.SyncAssets()
+type LogseqFS struct {
+	System fs.FS
+}
+
+func NewLogseqFS(system fs.FS) (*LogseqFS, error) {
+	folderInfo, err := fs.Stat(system, "logseq")
+
+	if err != nil {
+		return nil, err
+	}
+
+	if !folderInfo.IsDir() {
+		return nil, errors.New("logseq is not a directory")
+	}
+
+	return &LogseqFS{
+		System: system,
+	}, nil
+}
+
+type ObsidianFS struct {
+	System fs.FS
+}
+
+func NewObsidianFS(system fs.FS) (*ObsidianFS, error) {
+	folderInfo, err := fs.Stat(system, ".obsidian")
+
+	if err != nil {
+		return nil, err
+	}
+
+	if !folderInfo.IsDir() {
+		return nil, errors.New("obs is not a directory")
+	}
+
+	return &ObsidianFS{
+		System: system,
+	}, nil
+}
+
+type App struct {
+	LogseqFS   *LogseqFS
+	ObsidianFS *ObsidianFS
+}
+
+func NewApp(logseqFS *LogseqFS, obsidianFS *ObsidianFS) *App {
+	return &App{
+		LogseqFS:   logseqFS,
+		ObsidianFS: obsidianFS,
+	}
+}
+
+func (a *App) Sync() error {
+	err := a.SyncAssets()
+	if err != nil {
+		return err
+	}
 	a.SyncJournal()
 	a.SyncPages()
+
+	return nil
 }
 
-func (a *App) SyncAssets() {
+func (a *App) SyncAssets() error {
 	log.Println("Syncing assets")
+	entries, err := fs.ReadDir(a.LogseqFS.System, "assets")
+	if err != nil {
+		return err
+	}
 
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		log.Printf("Entry: %s", entry.Name())
+	}
+
+	return nil
 }
 
 func (a *App) SyncJournal() {
@@ -62,5 +122,4 @@ func (a *App) SyncJournal() {
 
 func (a *App) SyncPages() {
 	log.Println("Syncing pages")
-
 }
